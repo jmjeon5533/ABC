@@ -14,6 +14,7 @@ public class Nodes : MonoBehaviour
     public int bpm = -1;
     public bool flip;
     
+    public bool isCheck;
     public void OnNode()
     {
         Speed();

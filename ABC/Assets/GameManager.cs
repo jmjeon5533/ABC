@@ -12,25 +12,29 @@ public interface IModeInfo
 }
 public class GameMode : IModeInfo
 {
-    float curStartCount;
+    float curOffset;
     float halfRotateCheck;
-    bool canClick;
+    float countStartTime;
     public void Init()
     {
         var g = GameManager.instance;
         g.curNodeIndex = 0;
-        curStartCount = g.startCount;
-        g.curRotZ = (g.startCount % 2 + 1) * 180;
+        curOffset = g.Offset;
+        countStartTime = curOffset - (60 / g.bpm * g.countDown * 1000);
+        g.curRotZ = (g.Offset % 2 + 1) * 180;
         var firstCircle = g.circle[g.curNodeIndex % 2].position = g.saveData.maps[g.mapIndex].nodes[g.curNodeIndex].transform.position;
         g.cam.transform.position = firstCircle + (Vector3.back * 10);
         halfRotateCheck = 0;
         g.inverse = false;
+        g.isDead = false;
+        g.audioSource.clip = g.bgm;
+        g.audioSource.Play();
     }
     public void Loop()
     {
         var g = GameManager.instance;
-        var z = g.curRotZ += g.bpm / 60 * Time.deltaTime * 360 * (g.inverse ? -1 : 1);
-        curStartCount -= g.bpm / 60 * Time.deltaTime * 2;
+        var z = g.curRotZ += g.bpm / 120 * Time.deltaTime * 360 * (g.inverse ? 1 : -1);
+        curOffset -= Time.deltaTime * 1000;
         if (g.curRotZ >= 360)
         {
             g.curRotZ -= 360;
@@ -48,33 +52,39 @@ public class GameMode : IModeInfo
 
         g.cam.transform.position = Vector3.Lerp(g.cam.transform.position, firstCircle + (Vector3.back * 10), 0.1f);
 
-        var count = Mathf.Ceil(curStartCount);
+        var count = Mathf.Ceil(curOffset * 0.001f / (60 / g.bpm));
+        Debug.Log(count);
         if (count >= 0)
         {
             halfRotateCheck = g.curRotZ;
-            if (count > 3) g.startCountText.text = "";
-            else
+            if (count < g.countDown && count > 0)
             {
                 if (count > 0) g.startCountText.text = count.ToString();
-                else if (count == 0) g.startCountText.text = "시작!";
             }
+            else if (count == 0) g.startCountText.text = "시작!";
+            else g.startCountText.text = "";
         }
         else g.startCountText.text = "";
 
-        if (Mathf.DeltaAngle(g.curRotZ,g.saveData.maps[g.mapIndex].nodes[g.curNodeIndex].targetZ) < 45 && count <= 0)
+        var ableAngle = Mathf.DeltaAngle(g.curRotZ, g.saveData.maps[g.mapIndex].nodes[g.curNodeIndex].targetZ);
+        if (ableAngle < 45 && ableAngle > -45 && count <= 0)
         {
-            canClick = true;
-            if (Input.GetMouseButtonDown(0) && !g.IsClear())
+            if (Input.GetMouseButtonDown(0) && !g.IsClear() && !g.isDead)
             {
+                g.saveData.maps[g.mapIndex].nodes[g.curNodeIndex].isCheck = true;
                 g.NextNode();
-                canClick = false;
             }
         }
         else
         {
-            if (canClick && !g.IsClear())
+            
+            if (!g.saveData.maps[g.mapIndex].nodes[g.curNodeIndex].isCheck && !g.IsClear())
             {
-                if (count < 0) Debug.Log("Fail");
+                if (count < 0)
+                {
+                    Debug.Log("Fail");
+                    g.isDead = true;
+                }
             }
         }
     }
@@ -86,6 +96,7 @@ public class EditMode : IModeInfo
     {
         var g = GameManager.instance;
         g.selectNode = g.saveData.maps[g.mapIndex].nodes[0];
+        g.audioSource.Stop();
     }
     public void Loop()
     {
@@ -96,7 +107,7 @@ public class EditMode : IModeInfo
             if (EventSystem.current.IsPointerOverGameObject() == false)
             {
                 Vector3 mouse = g.cam.ScreenToWorldPoint(Input.mousePosition);
-                hit = Physics2D.Raycast(mouse, Vector3.forward, Mathf.Infinity,LayerMask.GetMask("Tile"));
+                hit = Physics2D.Raycast(mouse, Vector3.forward, Mathf.Infinity, LayerMask.GetMask("Tile"));
                 if (hit)
                 {
                     g.selectNode = hit.collider.GetComponent<Nodes>();
@@ -124,17 +135,19 @@ public class GameManager : MonoBehaviour
     [Header("NodeSetting")]
     public float bpm;
     public Mode modes;
-    public AudioClip bgm;
     public Nodes baseNode;
     public int curNodeIndex;
     public SaveData saveData;
     public int mapIndex;
     [Header("System")]
+    public AudioClip bgm;
+    public AudioSource audioSource;
     public Camera cam;
     public GameObject PlayParent;
     public Transform[] circle;
-    [Range(4, 10)]
-    public int startCount;
+    public bool isDead;
+    public int Offset;
+    public float countDown;
     public float curRotZ;
     public bool inverse;
     [Header("UI")]
@@ -162,7 +175,6 @@ public class GameManager : MonoBehaviour
     }
     void InitButton()
     {
-        var g = GameManager.instance;
         for (int i = 0; i < EditButton.Length; i++)
         {
             var num = i;
@@ -175,7 +187,7 @@ public class GameManager : MonoBehaviour
 
                 if (Mathf.Abs(newRotate) == 180)
                 {
-                    if(n.Count - 1 <= selectNode.index)
+                    if (n.Count - 1 <= selectNode.index)
                     {
                         print($"OutOfRange(MaxIndex : {n.Count - 1}, CurIndex{selectNode.index})");
                         selectNode = n[n.Count - 2];
@@ -206,12 +218,12 @@ public class GameManager : MonoBehaviour
         propertyAddButton[0].onClick.AddListener(() =>
         {
             selectNode.bpm = 100;
-            g.InitNode();
+            InitNode();
         });
         propertyAddButton[1].onClick.AddListener(() =>
         {
             selectNode.flip = !selectNode.flip;
-            g.InitNode();
+            InitNode();
         });
     }
     private void Update()
@@ -248,6 +260,9 @@ public class GameManager : MonoBehaviour
                 n[i].preNode = n[i - 1];
             }
             n[i].targetZ = beforeNodeRot;
+            n[i].isCheck = false;
+            obj.transform.position = beforeNodePos;
+            obj.transform.eulerAngles = Vector3.forward * obj.targetZ;
             beforeNodePos =
             obj.transform.position + new Vector3(Mathf.Cos(beforeNodeRot * Mathf.Deg2Rad) * 1.5f, Mathf.Sin(beforeNodeRot * Mathf.Deg2Rad) * 1.5f);
             n[i].index = i;
